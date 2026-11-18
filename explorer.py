@@ -50,6 +50,10 @@ async def verified_client(network):
         yield client
 
 
+MAX_HISTORY_ENTRIES = 10000
+MAX_SCAN_BYTES = 32 * 1024 * 1024
+
+
 async def scan_events(wallet, old, client):
     desc = account(wallet["descriptor"], wallet["network"])
     network = chain(wallet["network"])
@@ -57,6 +61,8 @@ async def scan_events(wallet, old, client):
     heights, scripts = {}, {}
     gap = wallet["gap_limit"]
     changes = set()
+    history_count = 0
+    raw_bytes = 0
     for branch in (0, 1):
         next_index = old["next"][branch] if old else 0
         index = 0
@@ -75,6 +81,9 @@ async def scan_events(wallet, old, client):
             hashes = [scripthash_from_scriptpubkey(spk.data) for spk in derived]
             histories = await asyncio.gather(*(client.get_history(h) for h in hashes))
             for spk, h, history in zip(derived, hashes, histories, strict=True):
+                history_count += len(history)
+                if history_count > MAX_HISTORY_ENTRIES:
+                    raise ValueError("Transaction history limit reached")
                 address = spk.address(network)
                 scripts[spk.data] = address
                 if branch:
@@ -90,6 +99,8 @@ async def scan_events(wallet, old, client):
                     next_index = max(next_index, index + 1)
                     heights.update({e.tx_hash: e.height for e in history})
                     for coin in await client.listunspent(h):
+                        if len(coins) >= MAX_HISTORY_ENTRIES:
+                            raise ValueError("Coin scan limit reached")
                         record["balance"] += coin.value
                         coins.append(
                             {
@@ -109,9 +120,11 @@ async def scan_events(wallet, old, client):
     received, spent, entries, timestamps = {}, {}, {}, {}
     for number, (txid, height) in enumerate(heights.items(), start=1):
         yield "progress", f"Loading transaction {number} of {len(heights)}…"
-        tx = await run_in_threadpool(
-            Transaction.from_string, await client.get_transaction(txid)
-        )
+        raw = await client.get_transaction(txid)
+        raw_bytes += len(raw) // 2
+        if raw_bytes > MAX_SCAN_BYTES:
+            raise ValueError("Transaction byte limit reached")
+        tx = await run_in_threadpool(Transaction.from_string, raw)
         if tx.txid().hex() != txid:
             raise ValueError("Unexpected transaction ID from Electrum")
         if height > 0 and height not in timestamps:

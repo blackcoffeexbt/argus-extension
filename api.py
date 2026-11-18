@@ -1,3 +1,5 @@
+from contextlib import aclosing
+
 import json
 import re
 import time
@@ -199,7 +201,30 @@ async def import_account(data: ImportAccount, wallet=Depends(owned)):
     return {"imported": True}
 
 
+# Admission has no await: one event loop atomically reserves a worker slot.
+# Limits apply per application worker; deployments should also bound worker count.
+MAX_ACTIVE_SCANS = 4
+SCAN_TIMEOUT = 120
+_active_scans = {}
+
+
 async def sync_events(wallet):
+    if (wallet["id"] in _active_scans or wallet["owner"] in _active_scans.values()
+            or len(_active_scans) >= MAX_ACTIVE_SCANS):
+        raise HTTPException(429, "A wallet scan is already running. Retry later.")
+    _active_scans[wallet["id"]] = wallet["owner"]
+    try:
+        async with asyncio.timeout(SCAN_TIMEOUT):
+            async with aclosing(_sync_events(wallet)) as events:
+                async for event in events:
+                    yield event
+    except TimeoutError as exc:
+        raise HTTPException(503, "Wallet scan time limit reached. Previous balance retained.") from exc
+    finally:
+        _active_scans.pop(wallet["id"], None)
+
+
+async def _sync_events(wallet):
     yield "progress", "Connecting to Electrum…"
     try:
         async with explorer(wallet["network"]) as client:

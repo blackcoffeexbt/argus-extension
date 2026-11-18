@@ -268,3 +268,39 @@ async def test_explorer_network_gate(monkeypatch, network, wrong):
         async with explorer.explorer(network) as client:
             assert isinstance(client, Client)
     assert closed == [True]
+
+
+@pytest.mark.anyio
+async def test_scan_admission_and_cleanup(monkeypatch):
+    async def worker(wallet):
+        yield "progress", "started"
+    monkeypatch.setattr(api, "_sync_events", worker)
+    first = api.sync_events({"id": "one", "owner": "alice"})
+    assert await anext(first) == ("progress", "started")
+    from fastapi import HTTPException
+    for wallet in ({"id": "one", "owner": "bob"}, {"id": "two", "owner": "alice"}):
+        with pytest.raises(HTTPException) as exc:
+            await anext(api.sync_events(wallet))
+        assert exc.value.status_code == 429
+    monkeypatch.setattr(api, "MAX_ACTIVE_SCANS", 1)
+    with pytest.raises(HTTPException):
+        await anext(api.sync_events({"id": "two", "owner": "bob"}))
+    await first.aclose()
+    assert not api._active_scans
+    assert [event async for event in api.sync_events({"id": "one", "owner": "alice"})]
+    assert not api._active_scans
+
+
+@pytest.mark.anyio
+async def test_scan_timeout_releases_slot(monkeypatch):
+    import asyncio
+    async def worker(wallet):
+        await asyncio.sleep(1)
+        yield "complete", {}
+    monkeypatch.setattr(api, "_sync_events", worker)
+    monkeypatch.setattr(api, "SCAN_TIMEOUT", 0.001)
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        await anext(api.sync_events({"id": "one", "owner": "alice"}))
+    assert exc.value.status_code == 503
+    assert not api._active_scans
