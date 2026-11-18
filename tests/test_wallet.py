@@ -346,3 +346,17 @@ async def test_scan_coin_consistency(monkeypatch, attack):
         snapshots = await scan()
         assert snapshots[0]["balance"] == 1000
         assert snapshots[0]["addresses"][0]["balance"] == 1000
+
+
+@pytest.mark.anyio
+async def test_sync_response_releases_worker_immediately(monkeypatch):
+    async def worker(wallet):
+        yield "complete", {"balance": 0}
+    monkeypatch.setattr(api, "_sync_events", worker)
+    wallet = {"id": "one", "owner": "alice", "descriptor": "present"}
+    assert await api.sync(False, wallet) == {"balance": 0}
+    assert not api._active_scans
+    response = await api.sync(True, wallet)
+    await anext(response.body_iterator)
+    await response.body_iterator.aclose()
+    assert not api._active_scans

@@ -262,14 +262,16 @@ async def sync(progress: bool = False, wallet=Depends(owned)):
     if not wallet["descriptor"]:
         raise HTTPException(409, "Pair your Argus first")
     if not progress:
-        async for event, value in sync_events(wallet):
-            if event == "complete":
-                return value
+        async with aclosing(sync_events(wallet)) as events:
+            async for event, value in events:
+                if event == "complete":
+                    return value
 
     async def stream():
         try:
-            async for event, value in sync_events(wallet):
-                yield f"event: {event}\ndata: {json.dumps(value)}\n\n"
+            async with aclosing(sync_events(wallet)) as events:
+                async for event, value in events:
+                    yield f"event: {event}\ndata: {json.dumps(value)}\n\n"
         except HTTPException as exc:
             yield f"event: error\ndata: {json.dumps(exc.detail)}\n\n"
         except Exception:
