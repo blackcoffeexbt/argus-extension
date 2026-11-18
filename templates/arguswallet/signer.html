@@ -11,6 +11,7 @@
       <div class="row items-center">
         <q-btn flat no-caps label="Reconnect" :disable="signing || busy" @click="dialog = true"></q-btn>
         <q-btn flat no-caps color="negative" label="Remove pairing" :disable="signing || busy" @click="forget"></q-btn>
+        <q-btn flat no-caps label="Remove all browser pairings" :disable="signing || busy" @click="forgetAll"></q-btn>
       </div>
     </div>
     <q-btn

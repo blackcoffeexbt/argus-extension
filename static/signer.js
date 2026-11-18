@@ -103,7 +103,7 @@ window.app.component("argus-wallet-signer", {
       },
     },
     storageKey() {
-      return `arguswallet:pair:v1:${this.userId}:${this.walletId}`;
+      return `arguswallet:pair:v2:${this.walletId}`;
     },
     isNostrSigner() {
       return true;
@@ -134,6 +134,23 @@ window.app.component("argus-wallet-signer", {
       } finally {
         this.stopping = false;
       }
+    },
+    migratePairings() {
+      const legacy = `arguswallet:pair:v1:${this.userId}:${this.walletId}`;
+      const saved = localStorage.getItem(legacy);
+      if (saved && !localStorage.getItem(this.storageKey))
+        localStorage.setItem(this.storageKey, saved);
+      // Remove login identifiers left by every account using this browser.
+      for (const key of Object.keys(localStorage)) {
+        if (key.startsWith("arguswallet:pair:v1:")) localStorage.removeItem(key);
+      }
+    },
+    forgetAll() {
+      this.disconnect();
+      for (const key of Object.keys(localStorage)) {
+        if (/^arguswallet:pair:v[12]:/.test(key)) localStorage.removeItem(key);
+      }
+      this.refreshPairing();
     },
     refreshPairing() {
       this.paired = this.hasPairing();
@@ -356,7 +373,10 @@ window.app.component("argus-wallet-signer", {
     },
   },
   mounted() {
-    if (typeof localStorage !== "undefined") this.refreshPairing();
+    if (typeof localStorage !== "undefined") {
+      this.migratePairings();
+      this.refreshPairing();
+    }
     this.onVisibilityChange = () => {
       if (!document.hidden) return;
       this.pin = "";
