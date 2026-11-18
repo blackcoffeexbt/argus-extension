@@ -1,0 +1,16 @@
+{
+  "name": "arguswallet",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build-signer.mjs",
+    "test": "node build-signer.mjs --check && node --test tests/signer.test.cjs"
+  },
+  "devDependencies": {
+    "@noble/ciphers": "2.1.1",
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "esbuild": "0.25.12",
+    "nostr-tools": "2.24.1"
+  }
+}

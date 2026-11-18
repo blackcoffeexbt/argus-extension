@@ -1,0 +1,7 @@
+{
+  "name": "Argus Wallet",
+  "short_description": "Onchain Bitcoin wallets with an Argus hardware signer",
+  "version": "0.1.0",
+  "min_lnbits_version": "1.6.2",
+  "tile": "/arguswallet/static/icon.svg"
+}
