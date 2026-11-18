@@ -1,0 +1,126 @@
+.argus-wallet-header,
+.argus-wallet-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.argus-wallet-header {
+  justify-content: space-between;
+}
+.argus-switcher {
+  width: clamp(14rem, 28vw, 20rem);
+}
+.argus-pairing {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.argus-create-dialog {
+  width: 25rem;
+  max-width: 95vw;
+}
+.argus-wallet-details {
+  display: grid;
+  gap: 20px;
+  padding: 12px 16px 16px;
+}
+.argus-gap-form {
+  display: grid;
+  grid-template-columns: minmax(9rem, 14rem) max-content;
+  align-items: center;
+  gap: 4px 10px;
+}
+#argus-gap-hint {
+  grid-column: 1 / -1;
+}
+.argus-descriptor {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.argus-explorer-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  color: inherit;
+  opacity: 0.75;
+  text-decoration: none;
+}
+.argus-explorer-link:hover,
+.argus-explorer-link:focus-visible {
+  color: var(--q-primary);
+  opacity: 1;
+}
+@media (max-width: 600px) {
+  .argus-wallet-controls {
+    width: 100%;
+  }
+  .argus-switcher {
+    flex: 1;
+    min-width: 0;
+  }
+}
+@media (max-width: 360px) {
+  .argus-gap-form {
+    grid-template-columns: 1fr;
+  }
+  .argus-gap-form .q-btn {
+    grid-row: 3;
+    justify-self: start;
+  }
+}
+
+.argus-balance-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+}
+.argus-sync-control {
+  justify-self: end;
+}
+.argus-sync-active {
+  align-self: center;
+  width: 16rem;
+  max-width: 100%;
+  padding: 12px 14px;
+  border: 1px solid rgba(128, 128, 140, 0.25);
+  border-radius: 8px;
+  background: rgba(128, 128, 140, 0.07);
+}
+.argus-sync-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.argus-sync-status {
+  margin: 5px 0 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 600px) {
+  .argus-balance-syncing {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .argus-sync-active {
+    width: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .argus-sync-active .q-linear-progress__model {
+    animation: none;
+  }
+  .argus-sync-active .q-linear-progress__model::before,
+  .argus-sync-active .q-linear-progress__model::after {
+    animation: none;
+  }
+}

@@ -1,0 +1,78 @@
+<template id="argus-ledger">
+  <section class="argus-ledger">
+    <q-tabs v-model="tab" dense no-caps align="left" active-color="primary" indicator-color="primary">
+      <q-tab v-for="name in ['Transactions','Addresses','UTXOs']" :key="name" :name="name" :label="name"></q-tab>
+    </q-tabs>
+    <div class="al-tools">
+      <q-input outlined dense clearable v-model="query" :placeholder="'Search '+(tab==='UTXOs' ? tab : tab.toLowerCase())" :aria-label="'Search '+(tab==='UTXOs' ? tab : tab.toLowerCase())">
+        <template #prepend><q-icon name="search" size="18px"></q-icon></template>
+      </q-input>
+      <q-btn v-if="tab==='Transactions'" flat dense no-caps icon="file_download" label="CSV" aria-label="Export transactions as CSV" :disable="!snapshot.history?.length" @click="$emit('export')"></q-btn>
+    </div>
+    <section v-for="group in groups" :key="group.name">
+      <button v-if="tab==='Addresses'" class="al-group" type="button" :aria-expanded="!collapsed[group.name]" @click="collapsed[group.name]=!collapsed[group.name]">
+        <q-icon :name="collapsed[group.name] ? 'chevron_right' : 'expand_more'"></q-icon><span v-text="group.name"></span>
+      </button>
+      <div v-show="!collapsed[group.name]" class="al-scroll" tabindex="0" :aria-label="group.name">
+        <table :class="'al-'+tab.toLowerCase()" :aria-label="group.name">
+          <thead><tr><th v-for="[key,title] in columns" :key="key" scope="col" :class="'al-'+key" :aria-sort="ariaSort(key)">
+            <button @click="sort(key)" type="button"><span v-text="title"></span><q-icon v-if="sorts[tab].key===key" :name="sorts[tab].direction===1?'arrow_upward':'arrow_downward'" size="12px"></q-icon></button>
+          </th></tr></thead>
+          <tbody>
+            <template v-for="r in group.rows" :key="r.key">
+              <tr class="al-row" :class="{'al-active':expanded===r.key, 'al-picked':r.kind==='utxo' && picked.has(r.key)}" @click="r.kind==='utxo' ? pick(r.key) : toggle(r.key)">
+                <td v-for="([key,title],i) in columns" :key="key" :class="'al-'+key">
+                  <div class="al-cell">
+                    <input v-if="i===0 && r.kind==='utxo'" type="checkbox" :aria-label="'Select '+r.key" :checked="picked.has(r.key)" :disabled="locked" @click.stop @change="pick(r.key)">
+                    <button v-if="i===0" type="button" class="al-expander" :aria-label="(expanded===r.key?'Collapse ':'Expand ')+r.key" :aria-expanded="expanded===r.key" @click.stop="toggle(r.key)">
+                      <q-icon :name="expanded===r.key?'expand_more':'chevron_right'" size="16px"></q-icon>
+                    </button>
+                    <span v-if="key==='date'" v-text="dateText(r)"></span>
+                    <button v-else-if="key==='label'" type="button" class="al-label-edit" :aria-label="'Edit label for '+r.key" :title="r.label || 'Add label'" @click.stop="$emit('label',r)">
+                      <span v-text="r.label"></span><q-icon name="edit" size="12px"></q-icon>
+                    </button>
+                    <span v-else-if="key==='value' || key==='balance'" :class="{'al-outgoing':r.kind==='tx' && key==='value' && r.value<0}" v-text="number(r[key])"></span>
+                    <span v-else-if="key==='confirmations'" :title="r.confirmations==null?'Sync to refresh confirmations':r.confirmations+' block confirmations at last sync'" v-text="r.confirmations ?? '—'"></span>
+                    <span v-else-if="key==='outpoint'" class="al-id" :title="r.key" v-text="outpoint(r)"></span>
+                    <span v-else class="al-id" :title="r[key]" v-text="r[key]"></span>
+                    <argus-explorer-link v-if="key==='address'" :network="network" :address="r.address"></argus-explorer-link>
+                    <argus-explorer-link v-if="key==='outpoint' || (key==='date' && r.kind==='tx')" :network="network" :txid="r.txid"></argus-explorer-link>
+                    <q-btn v-if="key==='outpoint'" flat dense round size="sm" icon="send" :aria-label="'Send '+r.key" title="Send this UTXO" :disable="locked" @click.stop="$emit('spend',[r.key])"></q-btn>
+                  </div>
+                </td>
+              </tr>
+              <tr v-if="expanded===r.key" class="al-detail"><td :colspan="columns.length">
+                <template v-if="r.kind==='tx'">
+                  <div v-for="o in r.inputs || []" :key="'i'+o.txid+':'+o.vout" class="al-leg"><span><span :title="o.address" v-text="'Spent '+outpoint(o)"></span><argus-explorer-link :network="network" :txid="o.txid"></argus-explorer-link></span><span v-text="number(-o.value)"></span></div>
+                  <div v-for="o in r.outputs || []" :key="o.vout" class="al-leg"><span><span :title="o.address" v-text="(o.change ? 'Change to ' : 'Received to ')+outpoint(o)"></span><argus-explorer-link :network="network" :txid="o.txid"></argus-explorer-link></span><span v-text="number(o.value)"></span></div>
+                </template>
+                <template v-if="r.kind==='address'">
+                  <div v-for="o in r.outputs" :key="o.txid+':'+o.vout" class="al-leg"><span><button type="button" :title="o.txid+':'+o.vout" @click="$emit('copy',o.txid+':'+o.vout)" v-text="o.status+' '+outpoint(o)"></button><argus-explorer-link :network="network" :txid="o.txid"></argus-explorer-link></span><span v-text="number(o.value)"></span></div>
+                </template>
+                <div class="al-full-id"><span v-text="r.key"></span><argus-explorer-link :network="network" :txid="r.txid" :address="r.address"></argus-explorer-link></div>
+                <div v-if="r.kind==='utxo'" class="al-full-id"><span v-text="r.address"></span><argus-explorer-link :network="network" :address="r.address"></argus-explorer-link></div>
+                <div class="al-actions">
+                  <q-btn dense flat no-caps :label="r.kind==='address'?'Copy address':r.kind==='tx'?'Copy transaction ID':'Copy output'" @click="$emit('copy',r.key)"></q-btn>
+                  <q-btn dense flat no-caps label="Edit label" @click="$emit('label',r)"></q-btn>
+                  <q-btn v-if="r.kind!=='address'" dense flat no-caps label="Transaction details" @click="$emit('details',r.txid)"></q-btn>
+                  <template v-else>
+                    <q-btn dense flat no-caps label="QR code" @click="$emit('qr',r.address)"></q-btn>
+                    <q-btn dense flat no-caps label="Transactions" @click="related('Transactions',r.address)"></q-btn>
+                    <q-btn dense flat no-caps label="UTXOs" @click="related('UTXOs',r.address)"></q-btn>
+                  </template>
+                </div>
+              </td></tr>
+            </template>
+            <tr v-if="!group.rows.length"><td :colspan="columns.length" class="al-empty" v-text="query ? 'No matches' : 'No '+group.name.toLowerCase()"></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <div v-if="tab==='UTXOs'" class="al-spend">
+      <span v-if="picked.size>32" role="status">Select up to 32 inputs per transaction.</span>
+      <q-btn flat dense no-caps :label="query ? 'Select matches' : 'Select all'" :disable="locked || !groups[0].rows.length" @click="selectVisible"></q-btn>
+      <q-btn flat dense no-caps label="Clear" :disable="locked || !picked.size" @click="picked.clear()"></q-btn>
+      <q-btn color="primary" no-caps unelevated icon="send" :label="picked.size ? 'Send selected ('+number(pickedAmount)+(sats?' sats':' BTC')+')' : 'Send selected'" :disable="locked || !picked.size || picked.size>32" @click="$emit('spend',Array.from(picked))"></q-btn>
+    </div>
+  </section>
+</template>

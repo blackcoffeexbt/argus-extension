@@ -2,6 +2,10 @@
 // accepted by the signer, using the same ceiling as bitcoin.prepare.
 window.ArgusCoins = (() => {
   const id = (c) => c.txid + ":" + c.vout;
+  function label(coin, labels, notes) {
+    return labels[id(coin)] || notes[coin.address] ||
+      (labels[coin.txid] ? labels[coin.txid] + " (received)" : "");
+  }
   function outputBytes(address) {
     const a = (address || "").toLowerCase();
     if (/^(bc|tb)1/.test(a)) {
@@ -75,5 +79,5 @@ window.ArgusCoins = (() => {
     return result;
   }
 
-  return { id, fee, select, parseBitcoinRequest };
+  return { id, label, fee, select, parseBitcoinRequest };
 })();

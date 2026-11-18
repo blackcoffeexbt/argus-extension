@@ -1,11 +1,11 @@
-function argusRequest(method, path, data) {
+function argusRequest(method, path, data, options = {}) {
   const usr = new URLSearchParams(location.search).get("usr");
   return LNbits.api.request(
     method,
     "/arguswallet/api/v1/wallets" + path,
     undefined,
     data,
-    { params: usr ? { usr } : {} },
+    { ...options, params: usr ? { usr } : {} },
   );
 }
 
@@ -23,6 +23,7 @@ window.app = Vue.createApp({
     wallets: [],
     selected: null,
     creating: false,
+    loaded: false,
     name: "",
     network: "Mainnet",
     working: false,
@@ -31,12 +32,17 @@ window.app = Vue.createApp({
     try {
       this.wallets = (await argusRequest("GET", "")).data;
       this.selected = this.wallets[0] || null;
-      this.creating = !this.selected;
+      this.loaded = true;
     } catch (error) {
       argusError(error);
     }
   },
   methods: {
+    openCreate() {
+      this.name = "";
+      this.network = this.selected?.network || "Mainnet";
+      this.creating = true;
+    },
     removedWallet() {
       this.wallets = this.wallets.filter((w) => w.id !== this.selected.id);
       this.selected = this.wallets[0] || null;
@@ -63,20 +69,50 @@ window.app = Vue.createApp({
   },
 });
 
+window.app.component("argus-explorer-link", {
+  props: ["network", "txid", "address"],
+  computed: {
+    href() {
+      const prefix = {
+        Mainnet: "http://mempool.space/",
+        Testnet4: "http://mempool.space/testnet4/",
+      }[this.network];
+      if (!prefix || !(this.txid || this.address)) return null;
+      return (
+        prefix +
+        (this.txid ? "tx/" : "address/") +
+        encodeURIComponent(this.txid || this.address)
+      );
+    },
+    description() {
+      return (
+        "Open " +
+        (this.txid ? "transaction" : "address") +
+        " on mempool.space (opens in a new tab)"
+      );
+    },
+  },
+  template: `<a v-if="href" class="argus-explorer-link" :href="href" target="_blank" rel="noopener noreferrer" :title="description" :aria-label="description" @click.stop><q-icon name="open_in_new" size="14px"></q-icon></a>`,
+});
+
 window.app.component("argus-wallet-panel", {
   template: "#argus-wallet-panel",
   props: ["wallet", "userId"],
   emits: ["working", "removed"],
   data: () => ({
     configured: false,
+    detailsOpen: false,
+    initialized: false,
     descriptor: "",
-    tab: "Activity",
-    filter: "",
     showReceive: false,
     showSend: false,
     receiveAmount: null,
     sats: true,
     notes: {},
+    labels: {},
+    gap: 20,
+    savedGap: 20,
+    editReference: "",
     qrAddress: "",
     editingAddress: "",
     note: "",
@@ -102,6 +138,7 @@ window.app.component("argus-wallet-panel", {
     snapshot: null,
     receive: null,
     syncing: false,
+    syncStatus: "",
     busy: false,
     coins: [],
     recipients: [{ address: "", amount: null }],
@@ -168,29 +205,18 @@ window.app.component("argus-wallet-panel", {
         this.selectedAmount - this.totalAmount - this.changeAmount,
       );
     },
-    records() {
-      const key = {
-        Activity: "history",
-        Addresses: "addresses",
-        Coins: "coins",
-      }[this.tab];
-      const query = this.filter.trim().toLowerCase();
-      return (this.snapshot?.[key] || []).filter(
-        (r) =>
-          !query ||
-          (JSON.stringify(r) + (this.notes[r.address] || ""))
-            .toLowerCase()
-            .includes(query),
-      );
-    },
     locked() {
       return this.busy || this.syncing || this.reviewOpen;
     },
     coinOptions() {
-      return (this.snapshot?.coins || []).map((c) => ({
-        label: c.value + " sats · " + c.txid + ":" + c.vout,
-        value: c.txid + ":" + c.vout,
-      }));
+      return [...(this.snapshot?.coins || [])]
+        .sort((a, b) => b.value - a.value || ArgusCoins.id(a).localeCompare(ArgusCoins.id(b)))
+        .map((coin) => {
+          const value = ArgusCoins.id(coin);
+          const name = ArgusCoins.label(coin, this.labels, this.notes);
+          const amount = coin.value.toLocaleString() + " sats";
+          return { value, label: [amount, name, value].filter(Boolean).join(" · ") };
+        });
     },
     valid() {
       return (
@@ -273,6 +299,46 @@ window.app.component("argus-wallet-panel", {
         "text/csv",
       );
     },
+    async saveGap() {
+      if (
+        this.locked ||
+        !Number.isInteger(this.gap) ||
+        this.gap < 1 ||
+        this.gap > 200
+      )
+        return;
+      this.busy = true;
+      try {
+        this.savedGap = (
+          await this.request("PUT", "/gap-limit", { gap_limit: this.gap })
+        ).data.gap_limit;
+        await this.refresh(true);
+      } catch (error) {
+        argusError(error);
+      } finally {
+        this.busy = false;
+      }
+    },
+    startLabel(row) {
+      if (row.kind === "address") this.editingAddress = row.key;
+      else this.editReference = row.key;
+      this.note =
+        row.kind === "address"
+          ? this.notes[row.key] || ""
+          : this.labels[row.key] || "";
+    },
+    async saveReference() {
+      const key = this.editReference;
+      try {
+        await this.request("PUT", "/labels/" + encodeURIComponent(key), {
+          label: this.note,
+        });
+        this.labels[key] = this.note.trim();
+        this.editReference = "";
+      } catch (error) {
+        argusError(error);
+      }
+    },
     async editNote() {
       try {
         await this.request(
@@ -307,17 +373,16 @@ window.app.component("argus-wallet-panel", {
       this.g.scanner = (value) => this.parseRecipient(r, value);
     },
     sendMaximum(index) {
-      this.mode = "Select All";
-      const coins = this.snapshot.coins;
+      if (this.mode !== "Manual") this.mode = "Select All";
       const others = this.recipients.reduce(
         (sum, r, i) => sum + (i === index ? 0 : Number(r.amount) || 0),
         0,
       );
       this.recipients[index].amount = Math.max(
         0,
-        this.snapshot.balance -
+        this.selectedAmount -
           others -
-          ArgusCoins.fee(coins.length, this.recipients, this.rate),
+          ArgusCoins.fee(this.selectedCoins.length, this.recipients, this.rate),
       );
     },
     async loadFees() {
@@ -329,6 +394,14 @@ window.app.component("argus-wallet-panel", {
       } finally {
         this.feeLoading = false;
       }
+    },
+    spendUtxos(ids) {
+      const available = new Set(this.snapshot.coins.map(ArgusCoins.id));
+      if (this.locked || !ids.length || ids.length > 32 || !ids.every(id => available.has(id))) return;
+      this.coins = [...ids];
+      this.mode = "Manual";
+      this.startPayment();
+      this.$nextTick(() => this.$refs.sendHeading?.focus());
     },
     async startPayment() {
       this.showSend = true;
@@ -358,21 +431,70 @@ window.app.component("argus-wallet-panel", {
         this.busy = false;
       }
     },
-    request(method, path, data) {
-      return argusRequest(method, "/" + this.wallet.id + path, data);
+    request(method, path, data, options) {
+      return argusRequest(method, "/" + this.wallet.id + path, data, options);
+    },
+    async syncWithProgress() {
+      let offset = 0;
+      let snapshot = null;
+      let failure = "";
+      const consume = (text) => {
+        if (typeof text !== "string") return;
+        let end;
+        while ((end = text.indexOf("\n\n", offset)) !== -1) {
+          const frame = text.slice(offset, end);
+          offset = end + 2;
+          const split = frame.indexOf("\ndata: ");
+          if (split < 0) continue;
+          const event = frame.slice(7, split);
+          const value = JSON.parse(frame.slice(split + 7));
+          if (event === "progress") this.syncStatus = value;
+          if (event === "complete") snapshot = value;
+          if (event === "error") failure = value;
+        }
+      };
+      const { data } = await this.request(
+        "POST",
+        "/sync?progress=true",
+        undefined,
+        {
+          responseType: "text",
+          onDownloadProgress: (update) =>
+            consume(update.event?.target?.responseText),
+        },
+      );
+      consume(data);
+      if (failure) throw new Error(failure);
+      // During local development the previous server may still return plain JSON.
+      if (!offset && data.startsWith("{")) {
+        const previous = JSON.parse(data);
+        if (Array.isArray(previous.coins)) return previous;
+      }
+      if (!snapshot)
+        throw new Error(
+          "Sync ended before the wallet balance was saved. Please retry.",
+        );
+      return snapshot;
     },
     async refresh(sync) {
       if (this.syncing) return;
       this.syncing = true;
+      this.syncStatus = sync ? "Starting wallet sync…" : "";
       try {
         const { data } = await this.request("GET", "");
         this.configured = !!data.descriptor;
+        if (!this.initialized) {
+          this.detailsOpen = !this.configured;
+          this.initialized = true;
+        }
         this.descriptor = (data.descriptor || "").replace("/{0,1}/", "/<0;1>/");
         this.notes = data.notes || {};
+        this.labels = data.labels || {};
+        this.gap = this.savedGap = data.gap_limit ?? 20;
         this.snapshot = data.snapshot;
         this.receive = data.receive;
         if (sync && this.configured)
-          this.snapshot = (await this.request("POST", "/sync")).data;
+          this.snapshot = await this.syncWithProgress();
         this.randomOrder = _.shuffle(
           (this.snapshot?.coins || []).map(ArgusCoins.id),
         );
@@ -383,6 +505,7 @@ window.app.component("argus-wallet-panel", {
         argusError(error);
       } finally {
         this.syncing = false;
+        this.syncStatus = "";
       }
     },
     async sign(exportOnly = false) {

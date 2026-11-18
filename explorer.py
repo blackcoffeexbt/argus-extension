@@ -1,5 +1,7 @@
 import asyncio
 import time
+from graphlib import TopologicalSorter
+from itertools import groupby
 
 from embit.transaction import Transaction
 from fastapi import HTTPException
@@ -32,18 +34,22 @@ def explorer(network):
     )
 
 
-async def scan(wallet, old, client):
+async def scan_events(wallet, old, client):
     desc = account(wallet["descriptor"], wallet["network"])
     network = chain(wallet["network"])
     coins, addresses, next_indices = [], [], []
     heights, scripts = {}, {}
+    gap = wallet["gap_limit"]
+    changes = set()
     for branch in (0, 1):
         next_index = old["next"][branch] if old else 0
         index = 0
-        while index < next_index + 20:
-            end = min(index + 8, next_index + 20)
+        while index < next_index + gap:
+            end = min(index + 8, next_index + gap)
             if end > 1000:
                 raise ValueError("Address scan limit reached")
+            branch_name = "change" if branch else "receive"
+            yield "progress", f"Checking {branch_name} addresses {index + 1}–{end}…"
             derived = await run_in_threadpool(
                 lambda: [
                     desc.derive(i, branch_index=branch).script_pubkey()
@@ -55,6 +61,8 @@ async def scan(wallet, old, client):
             for spk, h, history in zip(derived, hashes, histories, strict=True):
                 address = spk.address(network)
                 scripts[spk.data] = address
+                if branch:
+                    changes.add(address)
                 record = {
                     "address": address,
                     "branch": branch,
@@ -83,7 +91,8 @@ async def scan(wallet, old, client):
         next_indices.append(next_index)
 
     received, spent, entries, timestamps = {}, {}, {}, {}
-    for txid, height in heights.items():
+    for number, (txid, height) in enumerate(heights.items(), start=1):
+        yield "progress", f"Loading transaction {number} of {len(heights)}…"
         tx = await run_in_threadpool(
             Transaction.from_string, await client.get_transaction(txid)
         )
@@ -98,10 +107,21 @@ async def scan(wallet, old, client):
             "time": timestamps.get(height),
             "amount": 0,
             "addresses": set(),
+            "outputs": [],
+            "inputs": [],
         }
         for i, output in enumerate(tx.vout):
             address = scripts.get(output.script_pubkey.data)
             if address:
+                row["outputs"].append(
+                    {
+                        "txid": txid,
+                        "vout": i,
+                        "address": address,
+                        "value": output.value,
+                        "change": address in changes,
+                    }
+                )
                 received[(txid, i)] = (address, output.value)
                 row["amount"] += output.value
                 row["addresses"].add(address)
@@ -111,16 +131,40 @@ async def scan(wallet, old, client):
         for outpoint in spent[txid]:
             if outpoint in received:
                 address, value = received[outpoint]
+                row["inputs"].append(
+                    {
+                        "txid": outpoint[0],
+                        "vout": outpoint[1],
+                        "address": address,
+                        "value": value,
+                    }
+                )
                 row["amount"] -= value
                 row["addresses"].add(address)
         row["addresses"] = sorted(row["addresses"])
-    history = sorted(
-        entries.values(),
-        key=lambda r: (r["height"] <= 0, r["height"], r["txid"]),
-        reverse=True,
-    )
-    return {
+
+    # Parents precede children in the same block or mempool group.
+    def block_order(row):
+        return row["height"] if row["height"] > 0 else float("inf")
+
+    history = []
+    for _, group in groupby(sorted(entries.values(), key=block_order), key=block_order):
+        ids = sorted(r["txid"] for r in group)
+        members = set(ids)
+        order = TopologicalSorter(
+            {
+                txid: [parent for parent, _ in spent[txid] if parent in members]
+                for txid in ids
+            }
+        )
+        history.extend(entries[txid] for txid in order.static_order())
+    history.reverse()
+    yield "progress", "Checking the latest block height…"
+    tip_height = await client.get_height()
+    yield "snapshot", {
         "next": next_indices,
+        "gap_limit": gap,
+        "tip_height": tip_height,
         "coins": coins,
         "addresses": addresses,
         "history": history,

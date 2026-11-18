@@ -8,6 +8,7 @@ import math
 import asyncio
 from lnbits.utils.electrum import ElectrumError, parse_raw_tx
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from lnbits.core.models.users import Account
 from lnbits.db import Database
 from lnbits.decorators import check_account_exists
@@ -16,7 +17,7 @@ from pydantic import BaseModel, Field, conint
 from starlette.concurrency import run_in_threadpool
 
 from .bitcoin import account, chain, finalize, prepare
-from .explorer import explorer, scan
+from .explorer import explorer, scan_events
 
 db = Database("ext_arguswallet")
 router = APIRouter(prefix="/api/v1")
@@ -90,6 +91,14 @@ async def state(wallet=Depends(owned)):
         receive = desc.derive(0, branch_index=0).address(chain(wallet["network"]))
     return {
         "descriptor": wallet["descriptor"],
+        "gap_limit": wallet["gap_limit"],
+        "labels": {
+            r["reference"]: r["label"]
+            for r in await db.fetchall(
+                "SELECT reference, label FROM arguswallet.labels WHERE wallet = :id",
+                {"id": wallet["id"]},
+            )
+        },
         "notes": {
             row["address"]: row["note"]
             for row in await db.fetchall(
@@ -100,6 +109,48 @@ async def state(wallet=Depends(owned)):
         "snapshot": snapshot,
         "receive": receive,
     }
+
+
+class GapLimit(BaseModel):
+    gap_limit: conint(strict=True, ge=1, le=200)
+
+
+@router.put("/wallets/{wallet_id}/gap-limit")
+async def set_gap_limit(data: GapLimit, wallet=Depends(owned)):
+    snapshot = json.loads(wallet["snapshot"] or "{}")
+    if max(snapshot.get("next", [0, 0])) + data.gap_limit > 1000:
+        raise HTTPException(
+            400, "This gap would exceed the 1,000-address scan limit per branch."
+        )
+    await db.execute(
+        """UPDATE arguswallet.wallets SET gap_limit = :gap, revision = revision + 1
+        WHERE id = :id AND gap_limit != :gap""",
+        {"gap": data.gap_limit, "id": wallet["id"]},
+    )
+    return data
+
+
+class WalletLabel(BaseModel):
+    label: str = Field(max_length=500)
+
+
+@router.put("/wallets/{wallet_id}/labels/{reference}")
+async def save_label(reference: str, data: WalletLabel, wallet=Depends(owned)):
+    snapshot = json.loads(wallet["snapshot"] or "{}")
+    if not (
+        any(r["txid"] == reference for r in snapshot.get("history", []))
+        or any(
+            f"{c['txid']}:{c['vout']}" == reference for c in snapshot.get("coins", [])
+        )
+    ):
+        raise HTTPException(404, "Transaction or output not found in this wallet")
+    await db.execute(
+        """INSERT INTO arguswallet.labels (wallet, reference, label)
+        VALUES (:wallet, :ref, :label) ON CONFLICT (wallet, reference)
+        DO UPDATE SET label = excluded.label""",
+        {"wallet": wallet["id"], "ref": reference, "label": data.label.strip()},
+    )
+    return {"saved": True}
 
 
 class AddressNote(BaseModel):
@@ -124,6 +175,7 @@ async def save_note(address: str, data: AddressNote, wallet=Depends(owned)):
 async def remove_wallet(wallet=Depends(owned)):
     key = {"id": wallet["id"]}
     await db.execute("DELETE FROM arguswallet.drafts WHERE wallet = :id", key)
+    await db.execute("DELETE FROM arguswallet.labels WHERE wallet = :id", key)
     await db.execute("DELETE FROM arguswallet.notes WHERE wallet = :id", key)
     await db.execute("DELETE FROM arguswallet.wallets WHERE id = :id", key)
     return {"removed": True}
@@ -147,15 +199,17 @@ async def import_account(data: ImportAccount, wallet=Depends(owned)):
     return {"imported": True}
 
 
-@router.post("/wallets/{wallet_id}/sync")
-async def sync(wallet=Depends(owned)):
-    if not wallet["descriptor"]:
-        raise HTTPException(409, "Pair your Argus first")
+async def sync_events(wallet):
+    yield "progress", "Connecting to Electrum…"
     try:
         async with explorer(wallet["network"]) as client:
-            snapshot = await scan(
+            async for event, value in scan_events(
                 wallet, json.loads(wallet["snapshot"] or "null"), client
-            )
+            ):
+                if event == "snapshot":
+                    snapshot = value
+                    break
+                yield event, value
     except HTTPException:
         raise
     except Exception as exc:
@@ -163,6 +217,7 @@ async def sync(wallet=Depends(owned)):
             503,
             "Scan failed. Check the Electrum server connection and network in LNbits block explorer settings.",
         ) from exc
+    yield "progress", "Saving the wallet balance and transaction history…"
     result = await db.execute(
         """UPDATE arguswallet.wallets SET snapshot = :snapshot, revision = revision + 1
         WHERE id = :id AND revision = :revision""",
@@ -174,7 +229,32 @@ async def sync(wallet=Depends(owned)):
     )
     if not result.rowcount:
         raise HTTPException(409, "A newer scan finished. Refresh the wallet.")
-    return snapshot
+    yield "complete", snapshot
+
+
+@router.post("/wallets/{wallet_id}/sync")
+async def sync(progress: bool = False, wallet=Depends(owned)):
+    if not wallet["descriptor"]:
+        raise HTTPException(409, "Pair your Argus first")
+    if not progress:
+        async for event, value in sync_events(wallet):
+            if event == "complete":
+                return value
+
+    async def stream():
+        try:
+            async for event, value in sync_events(wallet):
+                yield f"event: {event}\ndata: {json.dumps(value)}\n\n"
+        except HTTPException as exc:
+            yield f"event: error\ndata: {json.dumps(exc.detail)}\n\n"
+        except Exception:
+            yield 'event: error\ndata: "Unable to save the wallet sync. Please retry."\n\n'
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/wallets/{wallet_id}/transactions/{txid}")

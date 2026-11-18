@@ -1,5 +1,6 @@
 """Offline extension route tests with a simulated explorer and signer."""
 
+import json
 from types import SimpleNamespace
 
 import httpx
@@ -12,7 +13,11 @@ from fastapi import FastAPI
 
 from arguswallet import api, arguswallet_ext
 from arguswallet.bitcoin import account, chain
-from arguswallet.migrations import m001_wallets, m002_address_notes
+from arguswallet.migrations import (
+    m001_wallets,
+    m002_address_notes,
+    m003_wallet_history_preferences,
+)
 from lnbits.utils.electrum import scripthash_from_address, ElectrumError
 
 
@@ -28,6 +33,7 @@ async def test_wallet_lifecycle(tmp_path, monkeypatch, network, coin_type):
     monkeypatch.setattr(api, "db", api.Database("ext_arguswallet"))
     await m001_wallets(api.db)
     await m002_address_notes(api.db)
+    await m003_wallet_history_preferences(api.db)
     root = bip32.HDKey.from_seed(bytes(range(32)), version=chain(network)["xprv"])
     path = f"84h/{coin_type}h/0h"
     key = root.derive("m/" + path).to_public()
@@ -53,6 +59,9 @@ async def test_wallet_lifecycle(tmp_path, monkeypatch, network, coin_type):
 
         async def __aexit__(self, *args):
             pass
+
+        async def get_height(self):
+            return 900000
 
         async def get_history(self, scripthash):
             if funded and scripthash == scripthash_from_address(
@@ -104,6 +113,11 @@ async def test_wallet_lifecycle(tmp_path, monkeypatch, network, coin_type):
         failed = await client.post(wallet + "/sync")
         assert failed.status_code == 503 and "Electrum" in failed.json()["detail"]
         assert (await client.get(wallet)).json() == first_state
+        failed_stream = await client.post(wallet + "/sync?progress=true")
+        assert (
+            "event: error" in failed_stream.text
+            and "event: complete" not in failed_stream.text
+        )
         offline = False
         empty = (await client.post(wallet + "/sync")).json()
         assert empty["balance"] == 0 and empty["coins"] == []
@@ -122,10 +136,46 @@ async def test_wallet_lifecycle(tmp_path, monkeypatch, network, coin_type):
             )
         ).is_success
         assert (await client.get(wallet)).json()["notes"][empty["receive"]] == "deposit"
+        assert first_state["gap_limit"] == 20
+        assert (
+            await client.put(wallet + "/gap-limit", json={"gap_limit": 0})
+        ).status_code == 422
+        assert (
+            await client.put(wallet + "/gap-limit", json={"gap_limit": 25})
+        ).is_success
         funded = True
-        snapshot = (await client.post(wallet + "/sync")).json()
+        response = await client.post(wallet + "/sync?progress=true")
+        assert response.headers["content-type"].startswith("text/event-stream")
+        events = []
+        for frame in response.text.strip().split("\n\n"):
+            kind, data = frame.split("\n", 1)
+            events.append(
+                (kind.removeprefix("event: "), json.loads(data.removeprefix("data: ")))
+            )
+        messages = [value for kind, value in events if kind == "progress"]
+        assert messages[0] == "Connecting to Electrum…"
+        assert "Checking receive addresses 1–8…" in messages
+        assert "Checking change addresses 1–8…" in messages
+        assert "Loading transaction 1 of 1…" in messages
+        assert messages[-1] == "Saving the wallet balance and transaction history…"
+        assert events[-1][0] == "complete"
+        snapshot = events[-1][1]
+        assert (await client.get(wallet)).json()["snapshot"] == snapshot
+        assert len(snapshot["addresses"]) == 51
+        assert snapshot["gap_limit"] == 25 and snapshot["tip_height"] == 900000
+        for ref in [txid, txid + ":0"]:
+            assert (
+                await client.put(wallet + "/labels/" + ref, json={"label": "Example"})
+            ).is_success
+        assert (await client.get(wallet)).json()["labels"] == {
+            txid: "Example",
+            txid + ":0": "Example",
+        }
+        assert snapshot["history"][0]["outputs"][0]["value"] == 100000
         assert snapshot["history"][0]["amount"] == 100000
-        assert (await client.get(wallet + "/transactions/" + txid)).json()["txid"] == txid
+        assert (await client.get(wallet + "/transactions/" + txid)).json()[
+            "txid"
+        ] == txid
         assert snapshot["balance"] == 100000 and snapshot["next"] == [1, 0]
         assert snapshot["receive"] == desc.derive(1, branch_index=0).address(
             chain(network)

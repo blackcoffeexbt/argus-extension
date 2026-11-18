@@ -1,22 +1,17 @@
 <template id="argus-wallet-signer">
   <div>
-    <div v-if="paired" class="row items-center q-gutter-sm">
-      <q-btn flat no-caps label="Reconnect" :disable="signing || busy" @click="dialog = true"></q-btn>
-      <q-icon name="verified_user" color="positive" size="24px"></q-icon>
-      <div>
-        <div class="text-weight-medium">Paired with remote signer</div>
-        <div class="text-caption text-grey">
-          Connects automatically when you sign
+    <div v-if="paired" class="argus-pairing">
+      <div class="row items-center no-wrap">
+        <q-icon name="verified_user" color="positive" size="22px" class="q-mr-sm"></q-icon>
+        <div>
+          <div class="text-weight-medium">Paired with remote signer</div>
+          <div class="text-caption">Connects automatically when you sign</div>
         </div>
       </div>
-      <q-btn
-        flat
-        no-caps
-        color="negative"
-        label="Remove pairing"
-        :disable="signing || busy"
-        @click="forget"
-      ></q-btn>
+      <div class="row items-center">
+        <q-btn flat no-caps label="Reconnect" :disable="signing || busy" @click="dialog = true"></q-btn>
+        <q-btn flat no-caps color="negative" label="Remove pairing" :disable="signing || busy" @click="forget"></q-btn>
+      </div>
     </div>
     <q-btn
       v-else

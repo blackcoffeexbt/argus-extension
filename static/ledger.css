@@ -1,0 +1,208 @@
+.argus-ledger {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+  --line: rgba(125, 125, 135, 0.28);
+}
+.al-tools,
+.al-actions,
+.al-cell,
+.al-leg,
+.al-group {
+  display: flex;
+  align-items: center;
+}
+.al-tools {
+  gap: 8px;
+  margin: 12px 0;
+}
+.al-tools .q-field {
+  flex: 1;
+}
+.al-scroll {
+  overflow: auto;
+  max-height: 27rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.argus-ledger table {
+  width: 100%;
+  border-spacing: 0;
+  table-layout: fixed;
+  font-size: 13px;
+}
+.al-transactions {
+  min-width: 545px;
+}
+.al-utxos {
+  min-width: 640px;
+}
+.al-addresses {
+  min-width: 430px;
+}
+.argus-ledger th,
+.argus-ledger td {
+  padding: 3px 8px;
+  text-align: left;
+}
+.argus-ledger th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--q-dark, #25252b);
+  color: white;
+  font-weight: 500;
+}
+.body--light .argus-ledger th {
+  background: #eceef1;
+  color: #25252b;
+}
+.argus-ledger button:not(.q-btn) {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+.argus-ledger th button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+}
+.al-row {
+  cursor: pointer;
+}
+.al-row:hover,
+.al-row.al-active {
+  background: rgba(128, 128, 140, 0.13);
+}
+.argus-ledger tbody tr + tr td {
+  border-top: 1px solid var(--line);
+}
+.al-cell {
+  min-width: 0;
+  min-height: 25px;
+}
+.al-cell > span,
+.al-label-edit span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.al-expander {
+  padding: 0;
+  display: flex;
+  margin-right: 4px;
+}
+.al-date {
+  width: 156px;
+}
+.al-confirmations {
+  width: 62px;
+}
+.al-outpoint {
+  width: 120px;
+}
+.al-transactions .al-value,
+.al-transactions .al-balance {
+  width: 19%;
+}
+.al-addresses .al-address {
+  width: 54%;
+}
+.al-addresses .al-value,
+.al-utxos .al-value {
+  width: 17%;
+}
+.argus-ledger .al-value,
+.argus-ledger .al-balance,
+.argus-ledger .al-confirmations {
+  text-align: right;
+}
+.al-value .al-cell,
+.al-balance .al-cell,
+.al-confirmations .al-cell {
+  justify-content: flex-end;
+}
+.al-id,
+.al-full-id {
+  font-family: ui-monospace, monospace;
+  font-size: 0.92em;
+}
+.al-full-id {
+  overflow-wrap: anywhere;
+  margin: 5px 0;
+}
+.al-label-edit {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-height: 24px;
+  padding: 0;
+  text-align: left;
+}
+.al-label-edit i {
+  opacity: 0;
+}
+.al-row:hover .al-label-edit i,
+.al-label-edit:focus-visible i {
+  opacity: 0.75;
+}
+.al-outgoing {
+  color: #b43e4a;
+}
+.body--dark .al-outgoing {
+  color: #ff9aa2;
+}
+.al-group {
+  gap: 5px;
+  padding: 10px 0 5px;
+  font-weight: 500;
+}
+.al-detail td {
+  padding: 8px 12px 8px 25px;
+  background: rgba(128, 128, 140, 0.06);
+}
+.al-leg {
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 0;
+}
+.al-actions {
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.argus-ledger .al-empty {
+  padding: 14px 10px;
+}
+@media (max-width: 600px) {
+  .al-transactions {
+    min-width: 460px;
+  }
+  .al-date {
+    width: 142px;
+  }
+  .al-transactions .al-value,
+  .al-transactions .al-balance {
+    width: 18%;
+  }
+  .al-label-edit i {
+    opacity: 0.45;
+  }
+}
+
+.al-spend {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.al-utxos .al-picked {
+  background: color-mix(in srgb, var(--q-primary) 18%, transparent);
+}
+.al-utxos .al-date { width: 180px; }
+.al-utxos .al-outpoint { width: 155px; }
+.al-utxos input[type="checkbox"] { accent-color: var(--q-primary); }
