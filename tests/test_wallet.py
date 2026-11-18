@@ -304,3 +304,45 @@ async def test_scan_timeout_releases_slot(monkeypatch):
         await anext(api.sync_events({"id": "one", "owner": "alice"}))
     assert exc.value.status_code == 503
     assert not api._active_scans
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("attack", [None, "duplicate", "value", "vout", "unrelated", "spent", "missing", "history_budget", "byte_budget"])
+async def test_scan_coin_consistency(monkeypatch, attack):
+    from arguswallet import explorer
+    root = bip32.HDKey.from_seed(bytes(range(32)))
+    key = root.derive("m/84h/0h/0h").to_public()
+    descriptor = add_checksum(f"wpkh([{root.my_fingerprint.hex()}/84h/0h/0h]{key}/<0;1>/*)")
+    desc = account(descriptor, "Mainnet")
+    spk = desc.derive(0, branch_index=0).script_pubkey()
+    funding = Transaction(vin=[TransactionInput(bytes(32), 0)], vout=[TransactionOutput(1000, spk)])
+    txid = funding.txid().hex()
+    spending = Transaction(vin=[TransactionInput(bytes.fromhex(txid), 0)], vout=[])
+    history = [SimpleNamespace(tx_hash=txid, height=0)]
+    raws = {txid: funding.serialize().hex()}
+    if attack == "spent":
+        history.append(SimpleNamespace(tx_hash=spending.txid().hex(), height=0))
+        raws[spending.txid().hex()] = spending.serialize().hex()
+    coin = SimpleNamespace(tx_hash=txid, tx_pos=0, value=1000, height=0)
+    if attack == "value": coin.value = 1001
+    if attack == "vout": coin.tx_pos = 1
+    if attack == "unrelated": coin.tx_hash = "ff" * 32
+    class Client:
+        async def get_history(self, h):
+            return history if h == scripthash_from_address(spk.address(chain("Mainnet"))) else []
+        async def listunspent(self, h):
+            return [] if attack == "missing" else [coin, coin] if attack == "duplicate" else [coin]
+        async def get_transaction(self, tx): return raws[tx]
+        async def get_height(self): return 1
+    if attack == "history_budget": monkeypatch.setattr(explorer, "MAX_HISTORY_ENTRIES", 0)
+    if attack == "byte_budget": monkeypatch.setattr(explorer, "MAX_SCAN_BYTES", 1)
+    async def scan():
+        return [value async for event, value in explorer.scan_events(
+            {"descriptor": descriptor, "network": "Mainnet", "gap_limit": 1}, None, Client()
+        ) if event == "snapshot"]
+    if attack:
+        with pytest.raises(ValueError): await scan()
+    else:
+        snapshots = await scan()
+        assert snapshots[0]["balance"] == 1000
+        assert snapshots[0]["addresses"][0]["balance"] == 1000

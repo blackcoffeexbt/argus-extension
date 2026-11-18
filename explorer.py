@@ -101,7 +101,6 @@ async def scan_events(wallet, old, client):
                     for coin in await client.listunspent(h):
                         if len(coins) >= MAX_HISTORY_ENTRIES:
                             raise ValueError("Coin scan limit reached")
-                        record["balance"] += coin.value
                         coins.append(
                             {
                                 "txid": coin.tx_hash,
@@ -156,6 +155,25 @@ async def scan_events(wallet, old, client):
                 row["addresses"].add(address)
         spent[txid] = [(inp.txid.hex(), inp.vout) for inp in tx.vin]
         entries[txid] = row
+    # A server-reported UTXO must agree with decoded wallet credits and spends.
+    spent_outpoints = {outpoint for inputs in spent.values() for outpoint in inputs}
+    expected = set(received) - spent_outpoints
+    seen = set()
+    balances = {a["address"]: 0 for a in addresses}
+    for coin in coins:
+        outpoint = (coin["txid"], coin["vout"])
+        if (outpoint in seen or outpoint not in expected
+                or received[outpoint] != (coin["address"], coin["value"])
+                or coin["height"] != heights[coin["txid"]]
+                or not 0 <= coin["value"] <= 21000000 * 100000000):
+            raise ValueError("Electrum coin disagrees with decoded wallet history")
+        seen.add(outpoint)
+        balances[coin["address"]] += received[outpoint][1]
+    if seen != expected:
+        raise ValueError("Electrum omitted an unspent wallet output")
+    for record in addresses:
+        record["balance"] = balances[record["address"]]
+
     for txid, row in entries.items():
         for outpoint in spent[txid]:
             if outpoint in received:
