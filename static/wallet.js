@@ -74,8 +74,8 @@ window.app.component("argus-explorer-link", {
   computed: {
     href() {
       const prefix = {
-        Mainnet: "http://mempool.space/",
-        Testnet4: "http://mempool.space/testnet4/",
+        Mainnet: "https://mempool.space/",
+        Testnet4: "https://mempool.space/testnet4/",
       }[this.network];
       if (!prefix || !(this.txid || this.address)) return null;
       return (

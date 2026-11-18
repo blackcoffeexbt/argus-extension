@@ -4,7 +4,9 @@ const vm = require('node:vm')
 const {readFileSync} = require('node:fs')
 function component(file, extra = {}) {
   let result
-  vm.runInNewContext(readFileSync(file, 'utf8'), {window: {app: {component: (_, c) => result = c}}, ...extra})
+  let source = readFileSync(file, 'utf8')
+  if (file === 'static/wallet.js') source = source.slice(source.indexOf('window.app.component("argus-explorer-link"'), source.indexOf('window.app.component("argus-wallet-panel"'))
+  vm.runInNewContext(source, {window: {app: {component: (_, c) => result = c}}, ...extra})
   return result
 }
 test('legacy pairing migration removes login identifiers and supports clearing all credentials', () => {
@@ -39,4 +41,16 @@ test('failed account import disconnects and propagates rejection', async () => {
   await assert.rejects(c.methods.importAccount.call(ctx), /mismatch/)
   assert.equal(disconnected, true)
   assert.equal(ctx.connected, false)
+})
+
+test('explorer links use HTTPS for addresses and transactions on both networks', () => {
+  const c = component('static/wallet.js')
+  // wallet.js registers multiple components; explorer link is registered last.
+  for (const network of ['Mainnet', 'Testnet4']) {
+    for (const tx of [true, false]) {
+      const href = c.computed.href.call({network, txid: tx ? 'abc' : '', address: tx ? '' : 'bc1abc'})
+      assert.match(href, /^https:\/\/mempool\.space\//)
+      assert.ok(href.includes(tx ? '/tx/' : '/address/'))
+    }
+  }
 })
