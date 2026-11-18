@@ -449,7 +449,7 @@ export class NostrBitcoinSigner {
       this.handshake = null
     }
   }
-  async sign(psbt) {
+  async sign(psbt, verifyAccount) {
     if (this.signing) throw new Error('A signing request is already active')
     this.signing = true
     try {
@@ -466,6 +466,7 @@ export class NostrBitcoinSigner {
       )
       // Refresh the boot session automatically before each signing request.
       await this.getAccount()
+      if (verifyAccount) await verifyAccount(this.account)
       this.onStatus('Establishing secure signing session')
       const hello = await this.startSession(hash)
       const result = await this.request(

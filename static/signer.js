@@ -198,7 +198,15 @@ window.app.component("argus-wallet-signer", {
       try {
         await this.ensureConnected();
         this.message = "Waiting for device…";
-        const signed = await this.client.sign(psbt);
+        const signed = await this.client.sign(psbt, async (account) => {
+          this.account = account;
+          try {
+            await this.verifyAccount();
+          } catch (error) {
+            this.disconnect();
+            throw error;
+          }
+        });
         this.signerResultReceived = true;
         this.message = "Signing complete";
         if (prepareReview) await prepareReview(signed);
@@ -331,12 +339,12 @@ window.app.component("argus-wallet-signer", {
           : "Connected. Retrieving public wallet…";
         this.account = await this.client.getAccount();
         if (forSigning) await this.verifyAccount();
-        this.connected = true;
-        this.$emit("device:connected", "nostr-device");
         if (!forSigning) {
           await this.importAccount();
           if (this.imported) this.dialog = false;
         }
+        this.connected = true;
+        this.$emit("device:connected", "nostr-device");
       } catch (error) {
         this.message = error.response?.data?.detail || error.message;
         if (!this.stopping) this.disconnect();
@@ -359,6 +367,8 @@ window.app.component("argus-wallet-signer", {
         this.message =
           error.response?.data?.detail || "Public account import failed";
         this.dialog = true;
+        this.disconnect();
+        throw error;
       }
     },
     scanError(error) {

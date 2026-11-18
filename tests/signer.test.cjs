@@ -402,3 +402,17 @@ test('an already completed request is not reported as cancelled', async () => {
     t.client.close()
   }
 })
+
+test('refreshed account rejection stops signing before secure session and PIN', async () => {
+  const {NostrBitcoinSigner} = await import('../static/nostr-signer-client.js')
+  let sessionStarted = false
+  const client = {signing: false, crypto: webcrypto,
+    getAccount: async function () {this.account = {descriptor: 'changed'}},
+    startSession: async () => {sessionStarted = true}}
+  await assert.rejects(NostrBitcoinSigner.prototype.sign.call(client, 'cHNidP8=', async account => {
+    assert.equal(account.descriptor, 'changed')
+    throw new Error('different signer account')
+  }), /different signer account/)
+  assert.equal(sessionStarted, false)
+  assert.equal(client.signing, false)
+})
