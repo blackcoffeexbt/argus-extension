@@ -23,3 +23,10 @@ test('legacy pairing migration removes login identifiers and supports clearing a
   c.methods.forgetAll.call(ctx)
   assert.deepEqual(Object.keys(storage), ['unrelated'])
 })
+
+test('confirmation counts explicitly disclose Electrum trust', () => {
+  const c = component('static/ledger.js')
+  const columns = c.computed.columns.call({sats: true, $q: {screen: {lt: {sm: false}}}, tab: 'Transactions'})
+  assert.match(columns.find(c => c[0] === 'confirmations')[1], /server/)
+  assert.match(readFileSync('templates/arguswallet/ledger.html', 'utf8'), /block inclusion is not independently verified/)
+})

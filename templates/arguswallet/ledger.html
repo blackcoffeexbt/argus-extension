@@ -32,7 +32,7 @@
                       <span v-text="r.label"></span><q-icon name="edit" size="12px"></q-icon>
                     </button>
                     <span v-else-if="key==='value' || key==='balance'" :class="{'al-outgoing':r.kind==='tx' && key==='value' && r.value<0}" v-text="number(r[key])"></span>
-                    <span v-else-if="key==='confirmations'" :title="r.confirmations==null?'Sync to refresh confirmations':r.confirmations+' block confirmations at last sync'" v-text="r.confirmations ?? '—'"></span>
+                    <span v-else-if="key==='confirmations'" :title="r.confirmations==null?'Sync to refresh server-reported confirmations':r.confirmations+' confirmations reported by Electrum at last sync; block inclusion is not independently verified'" v-text="r.confirmations ?? '—'"></span>
                     <span v-else-if="key==='outpoint'" class="al-id" :title="r.key" v-text="outpoint(r)"></span>
                     <span v-else class="al-id" :title="r[key]" v-text="r[key]"></span>
                     <argus-explorer-link v-if="key==='address'" :network="network" :address="r.address"></argus-explorer-link>

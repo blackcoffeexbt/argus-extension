@@ -23,7 +23,7 @@ window.app.component("argus-ledger", {
         Transactions: [
           ["date", "Date"],
           ["label", "Label"],
-          ["confirmations", "Confs"],
+          ["confirmations", "Confs (server)"],
           value,
           ["balance", "Balance (" + unit + ")"],
         ],
