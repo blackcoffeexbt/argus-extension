@@ -4,7 +4,9 @@ import time
 from typing import Literal
 from uuid import uuid4
 
-import httpx
+import math
+import asyncio
+from lnbits.utils.electrum import ElectrumError, parse_raw_tx
 from fastapi import APIRouter, Depends, HTTPException
 from lnbits.core.models.users import Account
 from lnbits.db import Database
@@ -13,8 +15,8 @@ from lnbits.settings import settings
 from pydantic import BaseModel, Field, conint
 from starlette.concurrency import run_in_threadpool
 
-from .bitcoin import account, finalize, prepare
-from .explorer import explorer, read, scan
+from .bitcoin import account, chain, finalize, prepare
+from .explorer import explorer, scan
 
 db = Database("ext_arguswallet")
 router = APIRouter(prefix="/api/v1")
@@ -81,10 +83,50 @@ async def new_wallet(data: NewWallet, owner: Account = Depends(check_account_exi
 
 @router.get("/wallets/{wallet_id}")
 async def state(wallet=Depends(owned)):
+    snapshot = json.loads(wallet["snapshot"] or "null")
+    receive = snapshot["receive"] if snapshot else None
+    if wallet["descriptor"] and not snapshot:
+        desc = account(wallet["descriptor"], wallet["network"])
+        receive = desc.derive(0, branch_index=0).address(chain(wallet["network"]))
     return {
         "descriptor": wallet["descriptor"],
-        "snapshot": json.loads(wallet["snapshot"] or "null"),
+        "notes": {
+            row["address"]: row["note"]
+            for row in await db.fetchall(
+                "SELECT address, note FROM arguswallet.notes WHERE wallet = :wallet",
+                {"wallet": wallet["id"]},
+            )
+        },
+        "snapshot": snapshot,
+        "receive": receive,
     }
+
+
+class AddressNote(BaseModel):
+    note: str = Field(max_length=500)
+
+
+@router.put("/wallets/{wallet_id}/addresses/{address}/note")
+async def save_note(address: str, data: AddressNote, wallet=Depends(owned)):
+    snapshot = json.loads(wallet["snapshot"] or "{}")
+    if not any(a["address"] == address for a in snapshot.get("addresses", [])):
+        raise HTTPException(404, "Sync this wallet to find the address")
+    await db.execute(
+        """INSERT INTO arguswallet.notes (wallet, address, note)
+        VALUES (:wallet, :address, :note) ON CONFLICT (wallet, address)
+        DO UPDATE SET note = excluded.note""",
+        {"wallet": wallet["id"], "address": address, "note": data.note},
+    )
+    return {"saved": True}
+
+
+@router.delete("/wallets/{wallet_id}")
+async def remove_wallet(wallet=Depends(owned)):
+    key = {"id": wallet["id"]}
+    await db.execute("DELETE FROM arguswallet.drafts WHERE wallet = :id", key)
+    await db.execute("DELETE FROM arguswallet.notes WHERE wallet = :id", key)
+    await db.execute("DELETE FROM arguswallet.wallets WHERE id = :id", key)
+    return {"removed": True}
 
 
 @router.put("/wallets/{wallet_id}/account")
@@ -114,9 +156,12 @@ async def sync(wallet=Depends(owned)):
             snapshot = await scan(
                 wallet, json.loads(wallet["snapshot"] or "null"), client
             )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
-            503, "Wallet scan failed. Retry to refresh the balance."
+            503,
+            "Scan failed. Check the Electrum server connection and network in LNbits block explorer settings.",
         ) from exc
     result = await db.execute(
         """UPDATE arguswallet.wallets SET snapshot = :snapshot, revision = revision + 1
@@ -130,6 +175,49 @@ async def sync(wallet=Depends(owned)):
     if not result.rowcount:
         raise HTTPException(409, "A newer scan finished. Refresh the wallet.")
     return snapshot
+
+
+@router.get("/wallets/{wallet_id}/transactions/{txid}")
+async def transaction_details(txid: str, wallet=Depends(owned)):
+    snapshot = json.loads(wallet["snapshot"] or "{}")
+    if not any(item["txid"] == txid for item in snapshot.get("history", [])):
+        raise HTTPException(404, "Transaction not found in this wallet")
+    try:
+        async with explorer(wallet["network"]) as client:
+            raw = await client.get_transaction(txid)
+        tx = await run_in_threadpool(
+            parse_raw_tx, raw, network=chain(wallet["network"])
+        )
+        if tx.txid != txid:
+            raise ValueError("Unexpected transaction")
+        return tx
+    except (OSError, ElectrumError, ValueError) as exc:
+        raise HTTPException(503, "Transaction unavailable from Electrum") from exc
+
+
+@router.get("/wallets/{wallet_id}/drafts")
+async def drafts(wallet=Depends(owned)):
+    return await db.fetchall(
+        """SELECT id, expires, unsigned FROM arguswallet.drafts
+        WHERE wallet = :id AND expires > :now ORDER BY expires DESC""",
+        {"id": wallet["id"], "now": int(time.time())},
+    )
+
+
+@router.get("/wallets/{wallet_id}/fees")
+async def fees(wallet=Depends(owned)):
+    client = explorer(wallet["network"])
+    try:
+        async with client:
+            rates = await asyncio.gather(
+                *(client.estimate_fee(n) for n in (1, 3, 6, 144))
+            )
+    except (OSError, ElectrumError) as exc:
+        raise HTTPException(503, "Electrum fee estimates are unavailable") from exc
+    return {
+        name: max(1, math.ceil(rate * 100000)) if rate > 0 else None
+        for name, rate in zip(("High", "Medium", "Low", "Economy"), rates, strict=True)
+    }
 
 
 @router.post("/wallets/{wallet_id}/payments", dependencies=[Depends(allow_send)])
@@ -152,7 +240,7 @@ async def payment(data: Payment, wallet=Depends(owned)):
                 if not re.fullmatch("[a-f0-9]{64}", txid):
                     raise ValueError("Invalid transaction ID")
                 if txid not in previous:
-                    previous[txid] = (await read(client, f"tx/{txid}/hex")).text.strip()
+                    previous[txid] = await client.get_transaction(txid)
         unsigned = await run_in_threadpool(
             prepare,
             wallet,
@@ -162,7 +250,9 @@ async def payment(data: Payment, wallet=Depends(owned)):
             data.rate,
             [previous[c["txid"]] for c in coins],
         )
-    except httpx.HTTPError as exc:
+    except HTTPException:
+        raise
+    except (OSError, ElectrumError) as exc:
         raise HTTPException(503, "Previous transaction unavailable") from exc
     except Exception as exc:
         raise HTTPException(
@@ -210,7 +300,7 @@ async def review(data: Signature, wallet=Depends(owned), draft=Depends(owned_dra
         ) from exc
     await db.execute(
         "UPDATE arguswallet.drafts SET signed_hex = :raw WHERE id = :id",
-        {"raw": tx.pop("hex"), "id": draft["id"]},
+        {"raw": tx["hex"], "id": draft["id"]},
     )
     return tx
 
@@ -227,11 +317,10 @@ async def broadcast(wallet=Depends(owned), draft=Depends(owned_draft)):
     expected = Transaction.from_string(draft["signed_hex"]).txid().hex()
     try:
         async with explorer(wallet["network"]) as client:
-            result = await client.post("tx", content=draft["signed_hex"])
-            result.raise_for_status()
-            if result.text.strip() != expected:
+            result = await client.broadcast(draft["signed_hex"])
+            if result != expected:
                 raise ValueError("Unexpected transaction ID")
-    except (httpx.HTTPError, ValueError) as exc:
+    except (OSError, ElectrumError, ValueError) as exc:
         raise HTTPException(
             503, f"Check transaction {expected} before retrying broadcast"
         ) from exc

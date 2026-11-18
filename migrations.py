@@ -19,3 +19,14 @@ async def m001_wallets(db):
             signed_hex TEXT
         )
     """)
+
+
+async def m002_address_notes(db):
+    await db.execute(f"""
+        CREATE TABLE arguswallet.notes (
+            wallet TEXT NOT NULL REFERENCES {db.references_schema}wallets(id) ON DELETE CASCADE,
+            address TEXT NOT NULL,
+            note TEXT NOT NULL,
+            PRIMARY KEY (wallet, address)
+        )
+    """)

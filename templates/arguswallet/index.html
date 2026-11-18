@@ -6,7 +6,7 @@
   <h1 class="text-h5 q-my-sm">Argus Wallet</h1>
   <q-select outlined v-if="wallets.length" label="Argus wallet" v-model="selected"
     :options="wallets" :option-label="w => w.name + ' · ' + w.network" :disable="working"></q-select>
-  <q-expansion-item label="Create an Argus wallet" :default-opened="!wallets.length" :disable="working">
+  <q-expansion-item label="Create an Argus wallet" v-model="creating" :disable="working">
     <q-form class="q-pa-md q-gutter-sm" @submit="createWallet">
       <q-input outlined label="Wallet name" v-model.trim="name" maxlength="80"></q-input>
       <q-select outlined label="Bitcoin network" v-model="network" :options="['Mainnet','Testnet4']"></q-select>
@@ -14,47 +14,132 @@
     </q-form>
   </q-expansion-item>
   <argus-wallet-panel v-if="selected" :key="selected.id" :wallet="selected" :user-id="g.user.id"
-    @working="working = $event"></argus-wallet-panel>
+    @working="working = $event" @removed="removedWallet"></argus-wallet-panel>
 </div>
 {% endblock %}
 {% block vue_templates %}
 {% include "arguswallet/signer.html" %}
 <template id="argus-wallet-panel">
   <div class="q-gutter-y-md">
-    <argus-wallet-signer ref="signer" :user-id="userId" :wallet-id="wallet.id" :network="wallet.network"
-      :request="request" @wallet-imported="refresh(true)"></argus-wallet-signer>
-    <div v-if="configured">
-      <q-btn no-caps outline label="Sync wallet" :loading="syncing" :disable="busy" @click="refresh(true)"></q-btn>
-    </div>
+    <q-card v-if="configured" flat bordered><q-card-section>
+      <div class="row items-center justify-between q-col-gutter-sm">
+        <div class="col"><div class="text-caption">Balance</div>
+          <q-btn flat dense no-caps v-if="snapshot" class="text-h5" :label="display(snapshot.balance)" aria-label="Switch balance unit" @click="sats=!sats"></q-btn>
+          <div v-else class="text-h6">Awaiting first sync</div>
+          <div v-if="snapshot" class="text-caption" v-text="'Last synced ' + new Date(snapshot.checked * 1000).toLocaleString()"></div>
+        </div>
+        <q-btn no-caps flat icon="refresh" label="Sync wallet" :loading="syncing" :disable="busy" @click="refresh(true)"></q-btn>
+      </div>
+      <div class="row q-gutter-sm q-mt-sm">
+        <q-btn no-caps color="primary" label="Receive" @click="showReceive=true"></q-btn>
+        <q-btn no-caps outline :label="showSend ? 'Cancel send' : 'Send'" :disable="locked || !snapshot?.coins?.length" @click="showSend ? showSend=false : startPayment()"></q-btn>
+      </div>
+    </q-card-section></q-card>
+    <q-dialog v-model="showReceive"><q-card class="q-pa-md">
+      <div class="text-h6">Receive bitcoin</div>
+      <lnbits-qrcode :value="paymentUri"></lnbits-qrcode>
+      <code style="overflow-wrap:anywhere" v-text="snapshot?.receive || receive"></code>
+      <q-input outlined type="number" min="1" step="1" v-model.number="receiveAmount" label="Amount in sats (optional)"></q-input>
+      <q-card-actions><q-btn flat no-caps label="Copy address" @click="copy(snapshot?.receive || receive)"></q-btn>
+        <q-btn flat no-caps label="Copy payment link" @click="copy(paymentUri)"></q-btn>
+        <q-btn flat no-caps label="Close" v-close-popup></q-btn></q-card-actions>
+    </q-card></q-dialog>
     <template v-if="snapshot">
-      <q-card flat bordered><q-card-section>
-        <div class="text-h6" v-text="snapshot.balance.toLocaleString() + ' sats'"></div>
-        <div v-text="'Last synced ' + new Date(snapshot.checked * 1000).toLocaleString()"></div>
-        <div class="q-mt-md text-subtitle1">Receive address</div>
-        <lnbits-qrcode :value="snapshot.receive"></lnbits-qrcode>
-        <code style="overflow-wrap:anywhere" v-text="snapshot.receive"></code>
-      </q-card-section></q-card>
-      <q-card flat bordered v-if="snapshot.coins.length"><q-card-section>
-        <q-form class="q-gutter-md" @submit="sign">
+      <q-card flat bordered v-if="showSend"><q-card-section>
+        <q-form class="q-gutter-md" @submit="sign(false)">
           <div class="text-h6">Send bitcoin</div>
-          <q-select outlined multiple emit-value map-options v-model="coins" label="Coins to spend" :options="coinOptions" :disable="locked"></q-select>
+          <q-select outlined v-model="mode" :options="modes" label="Coin selection" :disable="locked"></q-select>
+          <q-select v-if="mode === 'Manual'" outlined multiple emit-value map-options v-model="coins" label="Coins to spend" :options="coinOptions" :disable="locked"></q-select>
           <div v-for="(r,i) in recipients" :key="i" class="row q-col-gutter-sm">
-            <q-input outlined class="col-12 col-sm-7" label="Recipient address" v-model.trim="r.address" :disable="locked"></q-input>
+            <q-input outlined class="col-12 col-sm-7" label="Recipient address" :model-value="r.address" @update:model-value="value => parseRecipient(r,value)" :error="!!r.error" :error-message="r.error" hide-bottom-space :disable="locked"><template #append><q-btn flat round dense icon="qr_code_scanner" aria-label="Scan payment address" @click="scanRecipient(r)"></q-btn></template></q-input>
             <q-input outlined class="col" label="Amount (sats)" type="number" min="546" step="1" v-model.number="r.amount" :disable="locked"></q-input>
+            <q-btn flat no-caps label="Max" :disable="locked || !r.address" @click="sendMaximum(i)"></q-btn>
             <q-btn flat v-if="recipients.length > 1" icon="remove" aria-label="Remove recipient" :disable="locked" @click="recipients.splice(i,1)"></q-btn>
           </div>
           <q-btn flat no-caps label="Add recipient" :disable="locked || recipients.length >= 32" @click="recipients.push({address:'',amount:null})"></q-btn>
+          <div class="row q-gutter-sm"><q-btn v-for="(value,label) in estimates" :key="label" outline no-caps
+            :label="label + ' · ' + (value || 'unavailable') + (value ? ' sat/vB' : '')" :disable="locked || !value" @click="rate=value"></q-btn>
+            <q-btn flat no-caps label="Refresh fee estimates" :loading="feeLoading" @click="loadFees"></q-btn></div>
+          <q-slider :model-value="Math.log10(Math.max(1,Math.min(1000,rate)))" :min="0" :max="3" :step="0.01" :disable="locked" aria-label="Fee rate" @update:model-value="v => rate=Math.round(10**v)"></q-slider>
           <q-input outlined label="Fee rate (sat/vB)" type="number" min="1" max="10000" step="1" v-model.number="rate" :disable="locked"></q-input>
+          <q-separator></q-separator>
+          <div class="row justify-between q-gutter-sm"><div v-text="selectedCoins.length + ' selected · ' + display(selectedAmount)"></div>
+          <div v-if="selectedCoins.length" v-text="'Estimated fee ' + display(estimatedFee) + ' · Change ' + display(changeAmount)"></div></div>
+          <div v-if="changeAmount && snapshot.change" v-text="'Change address: ' + snapshot.change"></div>
+          <q-btn no-caps outline label="Export PSBT" :disable="locked || !valid" @click="sign(true)"></q-btn>
           <q-btn no-caps color="primary" label="Request Argus signature" type="submit" :disable="locked || !valid"></q-btn>
         </q-form>
       </q-card-section></q-card>
-      <q-expansion-item label="Address activity" v-if="snapshot.activity.length">
-        <q-list><q-item v-for="a in snapshot.activity" :key="a.address"><q-item-section>
-          <q-item-label v-text="a.address"></q-item-label>
-          <q-item-label caption v-text="(a.branch ? 'Change' : 'Receive') + ' · ' + a.transactions + ' transaction(s)'"></q-item-label>
-        </q-item-section></q-item></q-list>
-      </q-expansion-item>
+      <q-card flat bordered><q-card-section>
+        <q-tabs v-model="tab" no-caps><q-tab v-for="t in ['Activity','Addresses','Coins']" :key="t" :name="t" :label="t"></q-tab></q-tabs>
+        <q-input outlined dense clearable :model-value="filter" @update:model-value="v=>filter=v||''" label="Search transactions, addresses or amounts"></q-input>
+        <q-btn v-if="tab==='Activity' && snapshot.history?.length" flat no-caps label="Export transactions as CSV" @click="exportHistory"></q-btn>
+        <q-list separator style="max-height:450px;overflow:auto">
+          <q-item v-for="r in records" :key="r.txid ? r.txid + ':' + (r.vout ?? '') : r.address">
+            <q-item-section style="overflow-wrap:anywhere">
+              <template v-if="tab==='Activity'">
+                <q-item-label v-text="display(r.amount) + ' · ' + (r.height > 0 ? new Date(r.time*1000).toLocaleString() : 'Unconfirmed')"></q-item-label>
+                <q-item-label caption v-text="r.txid"></q-item-label><q-item-label caption v-text="r.addresses.join(' · ')"></q-item-label>
+              </template>
+              <template v-else>
+                <q-item-label v-text="r.address"></q-item-label>
+                <q-item-label caption v-text="(r.branch ? 'Change' : 'Receive') + ' / ' + r.index + ' · ' + display(r.value ?? r.balance)"></q-item-label>
+                <q-item-label v-if="tab==='Coins'" caption v-text="r.txid + ':' + r.vout + ' · ' + (r.height > 0 ? 'Confirmed' : 'Unconfirmed')"></q-item-label>
+                <q-item-label v-if="notes[r.address]" caption v-text="notes[r.address]"></q-item-label>
+              </template>
+            </q-item-section>
+            <q-item-section side><div class="row items-center"><q-btn v-if="tab==='Activity'" flat round icon="receipt_long" aria-label="Transaction details" @click="openTransaction(r.txid)"></q-btn>
+              <q-btn v-if="tab==='Addresses'" flat round icon="more_vert" aria-label="Address actions">
+                <q-menu><q-list><q-item clickable v-close-popup @click="qrAddress=r.address"><q-item-section>Show QR code</q-item-section></q-item>
+                  <q-item clickable v-close-popup @click="filter=r.address; tab='Activity'"><q-item-section>Address history</q-item-section></q-item>
+                  <q-item clickable v-close-popup @click="filter=r.address; tab='Coins'"><q-item-section>Address coins</q-item-section></q-item>
+                  <q-item clickable v-close-popup @click="editingAddress=r.address; note=notes[r.address]||''"><q-item-section>Edit note</q-item-section></q-item>
+                </q-list></q-menu>
+              </q-btn></div></q-item-section>
+
+          </q-item>
+          <q-item v-if="!records.length"><q-item-section v-text="filter ? 'No matches' : 'No entries'"></q-item-section></q-item>
+        </q-list>
+      </q-card-section></q-card>
     </template>
+    <q-dialog :model-value="!!qrAddress" @hide="qrAddress=''"><q-card class="q-pa-md">
+      <lnbits-qrcode v-if="qrAddress" :value="qrAddress"></lnbits-qrcode><code style="overflow-wrap:anywhere" v-text="qrAddress"></code>
+      <q-card-actions><q-btn flat no-caps label="Copy address" @click="copy(qrAddress)"></q-btn><q-btn flat label="Close" v-close-popup></q-btn></q-card-actions>
+    </q-card></q-dialog>
+    <q-dialog :model-value="!!editingAddress" @hide="editingAddress=''"><q-card class="q-pa-md">
+      <q-input outlined v-model="note" maxlength="500" label="Address note"></q-input><q-btn flat label="Save" @click="editNote"></q-btn>
+    </q-card></q-dialog>
+    <q-dialog :model-value="!!txDetail" @hide="txDetail=null"><q-card v-if="txDetail" class="q-pa-md" style="width:560px;overflow-wrap:anywhere">
+      <div class="text-h6">Transaction details</div><p v-text="txDetail.txid"></p>
+      <p v-text="txDetail.vsize+' vB · '+txDetail.vin.length+' inputs · '+txDetail.vout.length+' outputs'"></p>
+      <div v-for="o in txDetail.vout" :key="o.n" v-text="display(Math.round(o.value*1e8))+' · '+(o.scriptPubKey.address || o.scriptPubKey.hex)"></div>
+      <q-card-actions><q-btn flat no-caps label="Copy raw transaction" @click="copy(txDetail.hex)"></q-btn><q-btn flat label="Close" v-close-popup></q-btn></q-card-actions>
+    </q-card></q-dialog>
+    <q-dialog v-model="draftPicker"><q-card class="q-pa-md"><div class="text-h6">Select payment draft</div>
+      <p v-if="!drafts.length">No active drafts. Create a payment and choose Export PSBT.</p>
+      <q-list><q-item clickable v-for="d in drafts" :key="d.id" @click="draft=d.id; exported=d.unsigned; imported=''; draftPicker=false">
+        <q-item-section><q-item-label v-text="d.id"></q-item-label><q-item-label caption v-text="'Expires '+new Date(d.expires*1000).toLocaleTimeString()"></q-item-label></q-item-section>
+      </q-item></q-list><q-btn flat label="Close" v-close-popup></q-btn>
+    </q-card></q-dialog>
+    <q-dialog :model-value="!!exported" @hide="exported=''"><q-card class="q-pa-md" style="width:550px">
+      <div class="text-h6">Export unsigned PSBT</div>
+      <lnbits-qrcode v-if="psbtFrame" :value="psbtFrame" :show-buttons="false"></lnbits-qrcode>
+      <q-input outlined readonly type="textarea" :model-value="exported"></q-input>
+      <q-btn flat no-caps label="Copy unsigned PSBT" @click="copy(exported)"></q-btn>
+      <q-input outlined type="textarea" v-model="imported" label="Import signed PSBT"></q-input>
+      <q-btn no-caps color="primary" label="Review signed PSBT" :disable="!imported.trim() || busy" @click="importSigned"></q-btn>
+      <q-btn flat label="Close" v-close-popup></q-btn>
+    </q-card></q-dialog>
+    <argus-wallet-signer ref="signer" :user-id="userId" :wallet-id="wallet.id" :network="wallet.network"
+      :request="request" @wallet-imported="refresh(true)"></argus-wallet-signer>
+    <q-expansion-item label="Wallet details">
+      <div class="q-pa-sm" style="overflow-wrap:anywhere" v-text="descriptor"></div>
+      <q-btn flat no-caps v-if="descriptor" label="Import signed PSBT" @click="chooseDraft"></q-btn>
+      <q-btn flat no-caps v-if="descriptor" label="Copy public descriptor" @click="copy(descriptor)"></q-btn>
+      <q-btn flat no-caps color="negative" label="Remove wallet" @click="confirmRemove=true"></q-btn>
+    </q-expansion-item>
+    <q-dialog v-model="confirmRemove"><q-card class="q-pa-md"><p>Remove this watch-only wallet from LNbits?</p>
+      <q-btn flat label="Cancel" v-close-popup></q-btn><q-btn color="negative" label="Remove wallet" @click="removeWallet"></q-btn></q-card></q-dialog>
     <q-dialog v-model="reviewOpen" persistent>
       <q-card v-if="review" class="q-pa-md" style="max-width:95vw">
         <q-card-section class="text-h6">Review signed transaction</q-card-section>
@@ -63,6 +148,7 @@
           <q-item-label style="overflow-wrap:anywhere" v-text="o.address"></q-item-label>
         </q-item-section></q-item></q-list>
         <q-card-section v-text="'Network fee: ' + review.fee + ' sats'"></q-card-section>
+        <q-btn flat no-caps label="Copy signed transaction" @click="copy(review.hex)"></q-btn>
         <q-card-actions align="right">
           <q-btn no-caps flat label="Cancel" :disable="busy" @click="discard"></q-btn>
           <q-btn no-caps color="primary" label="Broadcast transaction" :loading="busy" @click="broadcast"></q-btn>
@@ -75,6 +161,7 @@
 {% endblock %}
 {% block scripts %}
 <script src="/arguswallet/static/nostr-signer.bundle.js"></script>
+<script src="/arguswallet/static/coin-selection.js"></script>
 <script src="/arguswallet/static/wallet.js"></script>
 <script src="/arguswallet/static/signer.js"></script>
 {% endblock %}

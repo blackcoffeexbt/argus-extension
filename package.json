@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "node build-signer.mjs",
-    "test": "node build-signer.mjs --check && node --test tests/signer.test.cjs"
+    "test": "node build-signer.mjs --check && node --test tests/*.test.cjs"
   },
   "devDependencies": {
     "@noble/ciphers": "2.1.1",

@@ -15,11 +15,11 @@ LNbits discovers installable versions from published GitHub releases in this rep
 ## Use
 
 1. Create a wallet, selecting the network configured on the Argus. Open pairing on the device. Scan or paste its code in the wallet and approve the browser on the device.
-2. Sync to discover funds. The extension queries mempool.space for the selected network, walking both receive and change branches until it finds 20 consecutive unused addresses beyond previously observed activity. A failed scan preserves the previous snapshot. The receive address updates after sync observes activity.
-3. Select coins, enter recipients and a fee rate in sat/vB, then request a signature. The device controls approval. If it requests a remote PIN, the browser sends it over the request-bound encrypted session.
+2. In LNbits block explorer settings, enable the explorer and select the Electrum server URL and network for this wallet. Sync to discover funds. The extension queries the configured server, walking both receive and change branches until it finds 20 consecutive unused addresses beyond previously observed activity. A failed scan preserves the previous snapshot. The receive address updates after sync observes activity.
+3. Open **Send**. Choose manual, random, all, smaller-first or larger-first coin selection. Enter recipients or use **Max**. Pick a fee estimate from Electrum or enter a custom rate in sat/vB. Review the selected amount, estimated fee and change, then request a signature. You can also export an unsigned PSBT and import the signed result. The device controls approval. If it requests a remote PIN, the browser sends it over the request-bound encrypted session.
 4. Review each signed output, change and fee. **Broadcast transaction** submits that signed transaction. After an uncertain broadcast result, check the displayed transaction ID before retrying. Payment drafts expire after 30 minutes.
 
-The extension stores the public descriptor, address activity, coins and payment drafts on the server. Pairing credentials stay in the browser. Public address queries and confirmed broadcasts go to mempool.space. Clearing browser storage requires a new device pairing.
+The extension stores the public descriptor, address activity, coins and payment drafts on the server. Pairing credentials stay in the browser. Scans, fee estimates, previous-transaction lookups and user-confirmed broadcasts use the configured Electrum server. Activity, Addresses and Coins show the last complete scan. You can search these lists, export transaction history as CSV and save address notes. Clearing browser storage requires a new device pairing.
 
 ## Development checks
 
