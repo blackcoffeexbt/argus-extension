@@ -4,7 +4,13 @@ A standalone Python extension for LNbits 1.6.2. Each LNbits user can create name
 
 ## Install
 
-From this directory, run `python3 package_extension.py --base-url https://YOUR-HOST/arguswallet`, substituting the HTTPS directory where your LNbits server can fetch the release. Serve the two files from `dist/` there. In LNbits admin settings, add the hosted `manifest.json` URL as a Python extension source. Install **Argus Wallet** from Extensions, activate it, then enable it for your user. Opening the extension takes you to `/arguswallet/`. All browser assets ship in the archive. LNbits supplies the Python dependencies.
+1. In LNbits admin settings, open **Extensions → Extension Sources**. Add the raw manifest URL and save your changes.
+
+   `https://raw.githubusercontent.com/blackcoffeexbt/argus-extension/main/manifest.json`
+
+2. Open **Extensions**, install **Argus Wallet**, then activate it and enable it for your user. Open the wallet at `/arguswallet/`.
+
+LNbits discovers installable versions from published GitHub releases in this repository.
 
 ## Use
 

@@ -1,0 +1,9 @@
+{
+  "repos": [
+    {
+      "id": "arguswallet",
+      "organisation": "blackcoffeexbt",
+      "repository": "argus-extension"
+    }
+  ]
+}
