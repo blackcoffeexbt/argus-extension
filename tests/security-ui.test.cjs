@@ -21,6 +21,7 @@ test('legacy pairing migration removes login identifiers and supports clearing a
   ctx.storageKey = c.computed.storageKey.call(ctx)
   c.methods.migratePairings.call(ctx)
   assert.equal(storage[ctx.storageKey], 'credential')
+  assert.equal(storage['arguswallet:pair:v2:other-wallet'], 'other')
   assert.ok(!Object.keys(storage).some(k => k.includes('login')))
   c.methods.forgetAll.call(ctx)
   assert.deepEqual(Object.keys(storage), ['unrelated'])
@@ -45,7 +46,7 @@ test('failed account import disconnects and propagates rejection', async () => {
 
 test('explorer links use HTTPS for addresses and transactions on both networks', () => {
   const c = component('static/wallet.js')
-  // wallet.js registers multiple components; explorer link is registered last.
+  // Inspect the explorer component independently of application startup.
   for (const network of ['Mainnet', 'Testnet4']) {
     for (const tx of [true, false]) {
       const href = c.computed.href.call({network, txid: tx ? 'abc' : '', address: tx ? '' : 'bc1abc'})

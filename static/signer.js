@@ -136,13 +136,14 @@ window.app.component("argus-wallet-signer", {
       }
     },
     migratePairings() {
-      const legacy = `arguswallet:pair:v1:${this.userId}:${this.walletId}`;
-      const saved = localStorage.getItem(legacy);
-      if (saved && !localStorage.getItem(this.storageKey))
-        localStorage.setItem(this.storageKey, saved);
-      // Remove login identifiers left by every account using this browser.
       for (const key of Object.keys(localStorage)) {
-        if (key.startsWith("arguswallet:pair:v1:")) localStorage.removeItem(key);
+        if (!key.startsWith("arguswallet:pair:v1:")) continue;
+        const walletId = key.slice(key.lastIndexOf(":") + 1);
+        const nextKey = `arguswallet:pair:v2:${walletId}`;
+        const saved = localStorage.getItem(key);
+        if (walletId && saved && !localStorage.getItem(nextKey))
+          localStorage.setItem(nextKey, saved);
+        localStorage.removeItem(key);
       }
     },
     forgetAll() {
