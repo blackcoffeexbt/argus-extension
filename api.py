@@ -286,9 +286,8 @@ async def drafts(wallet=Depends(owned)):
 
 @router.get("/wallets/{wallet_id}/fees")
 async def fees(wallet=Depends(owned)):
-    client = explorer(wallet["network"])
     try:
-        async with client:
+        async with explorer(wallet["network"]) as client:
             rates = await asyncio.gather(
                 *(client.estimate_fee(n) for n in (1, 3, 6, 144))
             )

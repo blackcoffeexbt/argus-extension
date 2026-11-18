@@ -60,6 +60,9 @@ async def test_wallet_lifecycle(tmp_path, monkeypatch, network, coin_type):
         async def __aexit__(self, *args):
             pass
 
+        async def server_features(self):
+            return SimpleNamespace(genesis_hash=explorer.GENESIS_HASHES[network])
+
         async def get_height(self):
             return 900000
 
@@ -235,3 +238,33 @@ def test_network_mismatch_and_disabled_explorer(monkeypatch):
     with pytest.raises(HTTPException) as mismatch:
         api.explorer("Testnet4")
     assert mismatch.value.status_code == 409
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("network", ["Mainnet", "Testnet4"])
+@pytest.mark.parametrize("wrong", [True, False])
+async def test_explorer_network_gate(monkeypatch, network, wrong):
+    from arguswallet import explorer
+
+    closed = []
+    class Client:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            closed.append(True)
+        async def server_features(self):
+            other = "Testnet4" if network == "Mainnet" else "Mainnet"
+            return SimpleNamespace(genesis_hash=explorer.GENESIS_HASHES[other if wrong else network])
+
+    monkeypatch.setattr(explorer.settings, "lnbits_blockexplorer_enabled", True)
+    monkeypatch.setattr(explorer.settings, "lnbits_blockexplorer_network", "main" if network == "Mainnet" else "test4")
+    monkeypatch.setattr(explorer, "ElectrumClient", lambda *a, **kw: Client())
+    from fastapi import HTTPException
+    if wrong:
+        with pytest.raises(HTTPException, match="wrong Bitcoin network"):
+            async with explorer.explorer(network):
+                pytest.fail("Wrong-chain client exposed to wallet queries")
+    else:
+        async with explorer.explorer(network) as client:
+            assert isinstance(client, Client)
+    assert closed == [True]

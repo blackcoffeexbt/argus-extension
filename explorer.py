@@ -1,5 +1,6 @@
 import asyncio
 import time
+from contextlib import asynccontextmanager
 from graphlib import TopologicalSorter
 from itertools import groupby
 
@@ -16,6 +17,12 @@ from starlette.concurrency import run_in_threadpool
 from .bitcoin import account, chain
 
 
+GENESIS_HASHES = {
+    "Mainnet": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+    "Testnet4": "00000000da84f2bafbbc53dee25a72ae507ff4914b867c565be350b0da8bf043",
+}
+
+
 def explorer(network):
     if not settings.lnbits_blockexplorer_enabled:
         raise HTTPException(
@@ -29,9 +36,18 @@ def explorer(network):
             409,
             f"Configure the LNbits block explorer for {network} to use this wallet.",
         )
-    return ElectrumClient(
+    return verified_client(network)
+
+
+@asynccontextmanager
+async def verified_client(network):
+    async with ElectrumClient(
         settings.lnbits_blockexplorer_electrum_url, network=chain(network)
-    )
+    ) as client:
+        features = await client.server_features()
+        if features.genesis_hash != GENESIS_HASHES[network]:
+            raise HTTPException(503, "Electrum server is on the wrong Bitcoin network")
+        yield client
 
 
 async def scan_events(wallet, old, client):
