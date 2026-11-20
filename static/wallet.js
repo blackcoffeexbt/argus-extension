@@ -20,6 +20,7 @@ function argusError(error) {
 window.app = Vue.createApp({
   mixins: [windowMixin],
   data: () => ({
+    RENDERED_ROUTE,
     wallets: [],
     selected: null,
     creating: false,
